@@ -5,6 +5,7 @@ using HollowTwitch.Components;
 using HollowTwitch.Entities.Attributes;
 using HollowTwitch.Extensions;
 using HollowTwitch.Precondition;
+using HutongGames.PlayMaker;
 using HutongGames.PlayMaker.Actions;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -17,27 +18,86 @@ namespace HollowTwitch.Commands
 {
     public class Enemies
     {
+        private static readonly string[] SpawnableEnemies =
+            { "aspid", "buzzer", "roller", "squit", "belfly", "vengefly", "marmu", "kingsmould" };
+
         [HKCommand("spawn")]
-        [Summary("Spawns an enemy.\nEnemies: [aspid, buzzer, roller]")]
+        [Summary("Spawns an enemy.\nEnemies: [aspid, buzzer, roller, squit, belfly, vengefly, marmu, kingsmould]")]
         [Cooldown(10)]
         public IEnumerator SpawnEnemy(string name)
         {
-            string[] enemies = { "aspid", "buzzer", "roller" };
-
             Logger.Log($"Trying to spawn enemy {name}");
 
             // Throwing here (instead of silently ending) makes the processor report
             // Failure so the viewer gets refunded for an unknown/unloaded enemy.
-            if (!enemies.Contains(name) || !ObjectLoader.InstantiableObjects.TryGetValue(name, out GameObject go) || go == null)
+            if (!SpawnableEnemies.Contains(name) || !ObjectLoader.InstantiableObjects.TryGetValue(name, out GameObject go) || go == null)
                 throw new ArgumentException($"Unknown or unloaded enemy \"{name}\".");
 
-            GameObject enemy = Object.Instantiate(go, HeroController.instance.gameObject.transform.position, Quaternion.identity);
+            // Spawn slightly ahead of and above the knight rather than inside them.
+            Vector3 offset = new((HeroController.instance.cState.facingRight ? 1 : -1) * 4f, 2f, 0f);
 
-            yield return new WaitForSecondsRealtime(1);
+            yield return SpawnOne(name, offset, 1f);
+        }
+
+        private static IEnumerator SpawnOne(string name, Vector3 offset, float activationDelay)
+        {
+            if (!ObjectLoader.InstantiableObjects.TryGetValue(name, out GameObject go) || go == null)
+                yield break;
+
+            GameObject enemy = Object.Instantiate(go, HeroController.instance.transform.position + offset, Quaternion.identity);
+
+            yield return new WaitForSecondsRealtime(activationDelay);
 
             // The scene may have changed while we waited, destroying the enemy.
-            if (enemy != null)
-                enemy.SetActive(true);
+            if (enemy == null)
+                yield break;
+
+            enemy.SetActive(true);
+            PostProcessSpawn(enemy);
+        }
+
+        private static void PostProcessSpawn(GameObject enemy)
+        {
+            try
+            {
+                // Keep boss-class spawns (vengefly king, marmu, kingsmould) killable.
+                var hm = enemy.GetComponent<HealthManager>();
+                if (hm != null && hm.hp > 80)
+                    hm.hp = 80;
+
+                // Killing a spawned ghost warrior must not count as defeating the real one.
+                if (enemy.name.Contains("Ghost Warrior"))
+                {
+                    FsmState set = enemy.LocateMyFSM("Set Ghost PD Int")?.GetState("Set");
+                    if (set != null)
+                        set.Actions = set.Actions.Where(a => a is not SetPlayerDataInt).ToArray();
+                }
+
+                // The colosseum vengefly king waits for its arena to wake it.
+                if (enemy.name.Contains("Giant Buzzer"))
+                    enemy.LocateMyFSM("Big Buzzer")?.SendEvent("WAKE");
+            }
+            catch (Exception e)
+            {
+                Logger.LogError(e);
+            }
+        }
+
+        [HKCommand("party")]
+        [Summary("Spawns a party of random enemies.")]
+        [Cooldown(30)]
+        public IEnumerator Party()
+        {
+            string[] pool = { "aspid", "buzzer", "roller", "squit", "belfly" };
+
+            for (int i = 0; i < 3; i++)
+            {
+                string name = pool[Random.Range(0, pool.Length)];
+
+                Vector3 offset = new(Random.Range(-5f, 5f), Random.Range(2f, 5f), 0f);
+
+                yield return SpawnOne(name, offset, 0.3f);
+            }
         }
 
         [HKCommand("jars")]
@@ -94,6 +154,10 @@ namespace HollowTwitch.Commands
                 ctrl.EnemyHP = 10;
 
                 yield return new WaitForSeconds(0.1f);
+
+                // Scene change during the stagger destroys pending jars.
+                if (go == null)
+                    yield break;
 
                 go.SetActive(true);
             }
@@ -184,6 +248,10 @@ namespace HollowTwitch.Commands
 
             yield return new WaitForSecondsRealtime(1);
 
+            // Scene may have changed during the wait, destroying the inactive copy.
+            if (revek == null)
+                yield break;
+
             Object.DontDestroyOnLoad(revek);
 
             revek.SetActive(true);
@@ -193,18 +261,11 @@ namespace HollowTwitch.Commands
             // Make sure init gets to run.
             yield return null;
 
-            // Actually spawn.
-            ctrl.SetState("Appear Pause");
-            
-            // ReSharper disable once ImplicitlyCapturedClosure (ctrl)
-            ctrl.GetState("Hit").AddMethod(() => Object.Destroy(revek));
-
-            // ReSharper disable once ImplicitlyCapturedClosure (ctrl)
             void OnUnload()
             {
                 if (revek == null)
                     return;
-                
+
                 revek.SetActive(false);
             }
 
@@ -214,7 +275,7 @@ namespace HollowTwitch.Commands
                 {
                     if (revek == null)
                         return;
-                    
+
                     revek.SetActive(true);
 
                     ctrl.SetState("Appear Pause");
@@ -225,15 +286,46 @@ namespace HollowTwitch.Commands
                 }
             }
 
-            GameManager.instance.UnloadingLevel += OnUnload;
-            USceneManager.activeSceneChanged += OnLoad;
+            try
+            {
+                if (ctrl != null)
+                {
+                    // Actually spawn.
+                    ctrl.SetState("Appear Pause");
 
-            yield return new WaitForSecondsRealtime(30);
+                    // ReSharper disable once ImplicitlyCapturedClosure (ctrl)
+                    ctrl.GetState("Hit").AddMethod(() => Object.Destroy(revek));
+                }
 
-            Object.Destroy(revek);
+                GameManager.instance.UnloadingLevel += OnUnload;
+                USceneManager.activeSceneChanged += OnLoad;
 
-            GameManager.instance.UnloadingLevel -= OnUnload;
-            USceneManager.activeSceneChanged -= OnLoad;
+                // 30s of actual gameplay, but never more than 60s of real time -
+                // he follows across scenes, so he must ALWAYS leave eventually.
+                for (float gameplay = 0, wall = 0; gameplay < 30f && wall < 60f;)
+                {
+                    if (revek == null) // parried
+                        break;
+
+                    wall += Time.unscaledDeltaTime;
+
+                    if (CrowdControl.Instance.Processor.IsGameReady())
+                        gameplay += Time.unscaledDeltaTime;
+
+                    yield return null;
+                }
+            }
+            finally
+            {
+                // Revek is DontDestroyOnLoad - he must never outlive his handlers.
+                if (GameManager.instance != null)
+                    GameManager.instance.UnloadingLevel -= OnUnload;
+
+                USceneManager.activeSceneChanged -= OnLoad;
+
+                if (revek != null)
+                    Object.Destroy(revek);
+            }
         }
 
         [HKCommand("duplicateboss")]
@@ -246,6 +338,10 @@ namespace HollowTwitch.Commands
 
             foreach (HealthManager boss in BossSceneController.Instance.bosses)
             {
+                // A boss can die or unload between the staggered spawns.
+                if (boss == null)
+                    continue;
+
                 Object.Instantiate
                 (
                     boss.gameObject,
@@ -299,11 +395,15 @@ namespace HollowTwitch.Commands
             
             for (int i = 0; i < 12; i++)
             {
+                // Player can quit to menu mid-barrage.
+                if (HeroController.instance == null)
+                    yield break;
+
                 GameObject zap = Object.Instantiate(prefab, HeroController.instance.transform.position, Quaternion.identity);
-                
+
                 zap.SetActive(true);
-                
-                yield return  new WaitForSeconds(0.5f);
+
+                yield return new WaitForSeconds(0.5f);
             }
         }
         

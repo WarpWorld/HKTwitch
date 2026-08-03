@@ -7,8 +7,8 @@ namespace HollowTwitch
 {
     public interface IClient : IDisposable
     {
-        /// <summary>Raised for effect start requests. Args: user, command, duration (ms), request id.</summary>
-        event Func<string, string, long?, uint?, (EffectStatus, Command)> ChatMessageReceived;
+        /// <summary>Raised for effect start requests. Args: user, command, duration (ms), request id, quantity.</summary>
+        event Func<string, string, long?, uint?, uint, (EffectStatus, Command)> ChatMessageReceived;
 
         event Action<string> ClientErrored;
 

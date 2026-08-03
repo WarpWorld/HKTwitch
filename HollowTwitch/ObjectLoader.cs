@@ -14,6 +14,14 @@ namespace HollowTwitch
 {
     internal static class ObjectLoader
     {
+        // Spawned copies shouldn't remember "defeated" state or mark the real enemy as killed.
+        private static readonly Func<GameObject, GameObject> RemovePersistence = obj =>
+        {
+            Object.Destroy(obj.GetComponent<PersistentBoolItem>());
+
+            return obj;
+        };
+
         public static readonly Dictionary<(string, Func<GameObject, GameObject>), (string, string)> ObjectList = new() {
             {
                 ("aspid", obj =>
@@ -52,6 +60,22 @@ namespace HollowTwitch
             },
             {
                 ("roller", null), ("Crossroads_ShamanTemple", "_Enemies/Roller")
+            },
+            {
+                ("squit", RemovePersistence), ("Fungus1_02", "Mosquito")
+            },
+            {
+                ("belfly", RemovePersistence), ("Deepnest_East_08", "Ceiling Dropper")
+            },
+            {
+                ("vengefly", RemovePersistence), ("GG_Vengefly", "Giant Buzzer Col")
+            },
+            {
+                ("marmu", RemovePersistence), ("Fungus3_40_boss", "Warrior/Ghost Warrior Marmu")
+            },
+            {
+                // Yes, the game really does spell it "Gaurd".
+                ("kingsmould", RemovePersistence), ("White_Palace_02", "Battle Scene/Royal Gaurd")
             },
             {
                 ("buzzer", null), ("Crossroads_ShamanTemple", "_Enemies/Buzzer")

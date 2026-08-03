@@ -172,8 +172,10 @@ namespace HollowTwitch
             return found;
         }
 
-        public (EffectStatus, Command) Execute(string user, string command, long? duration, uint? requestId = null, bool ignoreChecks = false)
+        public (EffectStatus, Command) Execute(string user, string command, long? duration, uint? requestId = null, uint quantity = 1, bool ignoreChecks = false)
         {
+            if (quantity < 1) quantity = 1;
+
             if (!IsGameReady()) return (EffectStatus.Retry, null);
 
             string[] pieces = command.Split(Seperator);
@@ -198,28 +200,17 @@ namespace HollowTwitch
 
                 foreach (PreconditionAttribute p in c.Preconditions)
                 {
-                    if (p is CooldownAttribute cooldown)
-                    {
-                        if (duration.HasValue) cooldown.Cooldown = TimeSpan.FromMilliseconds(duration.Value + 5);
-                        if (p.Check(user)) continue;
-                        allGood = false;
-                        sawTransientFailure = true;
+                    // The Crowd Control platform paces effect delivery itself - the mod
+                    // must not add its own rate limiting on top.
+                    if (p is CooldownAttribute)
+                        continue;
 
-                        Logger.Log
-                        (
-                            $"The coodown for command {c.Name} failed. "
-                            + $"The cooldown has {cooldown.MaxUses - cooldown.Uses} and will reset in {cooldown.ResetTime - DateTimeOffset.Now}"
-                        );
-                    }
-                    else
-                    {
-                        if (p.Check(user)) continue;
-                        allGood = false;
+                    if (p.Check(user)) continue;
+                    allGood = false;
 
-                        // Mutexes clear when the conflicting effect ends; other preconditions
-                        // (e.g. ability requirements) may also become true later, so retry either way.
-                        sawTransientFailure = true;
-                    }
+                    // Mutexes clear when the conflicting effect ends; other preconditions
+                    // (e.g. ability requirements) may also become true later, so retry either way.
+                    sawTransientFailure = true;
                 }
 
                 allGood |= ignoreChecks;
@@ -241,8 +232,32 @@ namespace HollowTwitch
                 if (!BuildArguments(args, c, out object[] parsed))
                     continue;
 
+                // Instant commands run synchronously right here (we're already on the
+                // main thread) - no coroutine hop, no overlap tracking, no added frame
+                // of latency, and rapid-fire purchases can't bounce off the guard.
+                if (c.MethodInfo.ReturnType != typeof(IEnumerator))
+                {
+                    try
+                    {
+                        Logger.Log($"Built arguments for command {command}.");
+
+                        for (uint q = 0; q < quantity; q++)
+                            c.MethodInfo.Invoke(c.ClassInstance, parsed);
+
+                        return (EffectStatus.Success, c);
+                    }
+                    catch (Exception e)
+                    {
+                        Logger.LogError(e);
+                        return (EffectStatus.Failure, c);
+                    }
+                }
+
                 foreach (PreconditionAttribute precond in c.Preconditions)
                 {
+                    if (precond is CooldownAttribute)
+                        continue;
+
                     precond.Use();
                 }
 
@@ -259,7 +274,7 @@ namespace HollowTwitch
 
                     _running[c.Name.ToLowerInvariant()] = effect;
 
-                    _coroutineRunner.StartCoroutine(RunCommand(c, parsed, effect));
+                    _coroutineRunner.StartCoroutine(RunCommand(c, parsed, effect, quantity));
                     return (EffectStatus.Success, c);
                 }
                 catch (Exception e)
@@ -284,7 +299,7 @@ namespace HollowTwitch
         /// - guaranteed precondition reset even if the command throws,
         /// - a Finished (or Failure) report when the effect ends.
         /// </summary>
-        private IEnumerator RunCommand(Command c, object[] parsed, RunningEffect effect)
+        private IEnumerator RunCommand(Command c, object[] parsed, RunningEffect effect, uint quantity = 1)
         {
             /*
              * We have to wait a frame in order to make Unity itself call
@@ -295,75 +310,77 @@ namespace HollowTwitch
             yield return null;
 
             bool errored = false;
-            IEnumerator body = null;
 
-            try
+            // Quantity purchases ("3x") chain the effect back-to-back.
+            for (uint q = 0; q < quantity && !errored && !effect.StopRequested; q++)
             {
-                if (c.MethodInfo.ReturnType == typeof(IEnumerator))
-                    body = c.MethodInfo.Invoke(c.ClassInstance, parsed) as IEnumerator;
-                else
-                    c.MethodInfo.Invoke(c.ClassInstance, parsed);
-            }
-            catch (Exception e)
-            {
-                errored = true;
-                Logger.LogError(e);
-            }
-
-            // Drive the command (and any enumerators it yields) manually instead of handing
-            // nested enumerators to Unity - that way duration waits are intercepted at every
-            // nesting level (e.g. commands that "yield return PlayerDataUtil.FakeSet(...)").
-            var stack = new Stack<IEnumerator>();
-            if (body != null) stack.Push(body);
-
-            while (stack.Count > 0)
-            {
-                IEnumerator current_enumerator = stack.Peek();
-                object current;
+                IEnumerator body = null;
 
                 try
                 {
-                    if (!current_enumerator.MoveNext())
-                    {
-                        stack.Pop();
-                        continue;
-                    }
-
-                    current = current_enumerator.Current;
+                    body = c.MethodInfo.Invoke(c.ClassInstance, parsed) as IEnumerator;
                 }
                 catch (Exception e)
                 {
-                    // The command blew up mid-run; make sure we still clean up below
-                    // so mutexes/cooldowns don't stay held forever.
                     errored = true;
                     Logger.LogError(e);
-                    break;
                 }
 
-                // Intercept plain duration waits so effect timers pause while the game can't
-                // actually show the effect (pause menu, death, transitions, menus).
-                // Note: WaitForSecondsRealtime IS an IEnumerator (CustomYieldInstruction),
-                // so these cases must precede the generic IEnumerator case.
-                switch (current)
+                // Drive the command (and any enumerators it yields) manually instead of handing
+                // nested enumerators to Unity - that way duration waits are intercepted at every
+                // nesting level (e.g. commands that "yield return PlayerDataUtil.FakeSet(...)").
+                var stack = new Stack<IEnumerator>();
+                if (body != null) stack.Push(body);
+
+                while (stack.Count > 0)
                 {
-                    case WaitForSecondsRealtime realtime:
+                    IEnumerator current_enumerator = stack.Peek();
+                    object current;
+
+                    try
                     {
-                        IEnumerator wait = GatedWait(realtime.waitTime, effect, unscaled: true);
-                        while (wait.MoveNext()) yield return wait.Current;
+                        if (!current_enumerator.MoveNext())
+                        {
+                            stack.Pop();
+                            continue;
+                        }
+
+                        current = current_enumerator.Current;
+                    }
+                    catch (Exception e)
+                    {
+                        // The command blew up mid-run; make sure we still clean up below
+                        // so mutexes/cooldowns don't stay held forever.
+                        errored = true;
+                        Logger.LogError(e);
                         break;
                     }
-                    case WaitForSeconds scaled when WaitForSecondsField?.GetValue(scaled) is float seconds:
+
+                    // Intercept plain duration waits so effect timers pause while the game can't
+                    // actually show the effect (pause menu, death, transitions, menus).
+                    // Note: WaitForSecondsRealtime IS an IEnumerator (CustomYieldInstruction),
+                    // so these cases must precede the generic IEnumerator case.
+                    switch (current)
                     {
-                        IEnumerator wait = GatedWait(seconds, effect, unscaled: false);
-                        while (wait.MoveNext()) yield return wait.Current;
-                        break;
+                        case WaitForSecondsRealtime realtime:
+                        {
+                            IEnumerator wait = GatedWait(realtime.waitTime, effect, unscaled: true);
+                            while (wait.MoveNext()) yield return wait.Current;
+                            break;
+                        }
+                        case WaitForSeconds scaled when WaitForSecondsField?.GetValue(scaled) is float seconds:
+                        {
+                            IEnumerator wait = GatedWait(seconds, effect, unscaled: false);
+                            while (wait.MoveNext()) yield return wait.Current;
+                            break;
+                        }
+                        case IEnumerator nested:
+                            stack.Push(nested);
+                            break;
+                        default:
+                            yield return current;
+                            break;
                     }
-                    case IEnumerator nested:
-                        stack.Push(nested);
-                        break;
-                    default:
-                        yield return current;
-                        break;
                 }
             }
 

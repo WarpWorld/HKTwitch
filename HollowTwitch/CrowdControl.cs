@@ -137,7 +137,7 @@ namespace HollowTwitch
             _currentThread?.Abort();
         }
 
-        private (EffectStatus, Command) OnMessageReceived(string user, string message, long? duration, uint? requestId)
+        private (EffectStatus, Command) OnMessageReceived(string user, string message, long? duration, uint? requestId, uint quantity)
         {
             Log($"Twitch chat: [{user}: {message}]");
 
@@ -149,7 +149,7 @@ namespace HollowTwitch
             string command = trimmed.Substring(Config.Prefix.Length).Trim();
 
             Logger.Log($"OnMessageReceived is calling Processor.Execute with duration " + duration);
-            return Processor.Execute(user, command, duration, requestId);
+            return Processor.Execute(user, command, duration, requestId, quantity);
         }
 
         private void GenerateHelpInfo()

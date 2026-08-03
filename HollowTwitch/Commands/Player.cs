@@ -242,8 +242,11 @@ namespace HollowTwitch.Commands
                 // Always wake back up, no matter how the sleep ended.
                 ModHooks.TakeDamageHook -= OnDamage;
 
-                hc.StartAnimationControl();
-                hc.RegainControl();
+                if (hc != null)
+                {
+                    hc.StartAnimationControl();
+                    hc.RegainControl();
+                }
             }
         }
 
@@ -314,13 +317,25 @@ namespace HollowTwitch.Commands
             ModHooks.BlueHealthHook += BlueHealth;
             ModHooks.CharmUpdateHook += CharmUpdate;
 
+            bool heroLost = false;
+
             for (float elapsed = 0; elapsed < duration;)
             {
-                bool ready = !(HeroController.instance.cState.isPaused
-                               || HeroController.instance.cState.dead
-                               || HeroController.instance.cState.hazardDeath
-                               || HeroController.instance.cState.transitioning
-                               || HeroController.instance.cState.nearBench);
+                // Quit-to-menu destroys the hero mid-effect; exit through cleanup
+                // instead of throwing and leaking the hooks.
+                HeroController hc = HeroController.instance;
+
+                if (hc == null || hc.cState == null)
+                {
+                    heroLost = true;
+                    break;
+                }
+
+                bool ready = !(hc.cState.isPaused
+                               || hc.cState.dead
+                               || hc.cState.hazardDeath
+                               || hc.cState.transitioning
+                               || hc.cState.nearBench);
 
                 if (running)
                 {
@@ -340,7 +355,9 @@ namespace HollowTwitch.Commands
             try { ModHooks.BlueHealthHook -= BlueHealth; } catch {/**/}
             try { ModHooks.CharmUpdateHook -= CharmUpdate; } catch {/**/}
 
-            unset();
+            // With the hero gone there is nothing to restore (and unset would throw).
+            if (!heroLost)
+                unset();
         }
 
         [HKCommand("wind")]
@@ -349,8 +366,13 @@ namespace HollowTwitch.Commands
         [Mutex("BoundaryLimit")]
         public IEnumerator Wind(long duration = 30000)
         {
-            float speed = Random.Range(-6f, 6f);
+            // Keep a minimum magnitude so the wind is always actually noticeable.
+            float speed = Random.Range(2.5f, 6f) * (Random.Range(0, 2) == 0 ? 1f : -1f);
+
+            // conveyorSpeed should be 0 outside real wind/conveyor zones - never re-install
+            // a stale leftover value (vanilla wind never exceeds ~6).
             float prev_s = HeroController.instance.conveyorSpeed;
+            if (Mathf.Abs(prev_s) > 8f) prev_s = 0f;
 
             IEnumerator i = BoundaryLimit(() =>
             {
@@ -927,6 +949,177 @@ namespace HollowTwitch.Commands
             ModHooks.TakeDamageHook += InstanceOnTakeDamageHook;
             yield return new WaitForSecondsRealtime(duration / 1000f);
             ModHooks.TakeDamageHook -= InstanceOnTakeDamageHook;
+        }
+
+        /// <summary>
+        /// Temporarily fakes a charm as owned+equipped so its companion (Grimmchild,
+        /// weaverlings, hatchlings, dreamshield) spawns, then unequips it again.
+        /// The companion FSMs live on "Charm Effects" and react to the CHARM EQUIP CHECK
+        /// broadcast, the same one the charm board sends.
+        /// </summary>
+        private static IEnumerator FakeCharmCompanion(int charmId, float seconds, int grimmLevel = 0)
+        {
+            bool GetBool(string name, bool orig)
+                => name == $"gotCharm_{charmId}" || name == $"equippedCharm_{charmId}" || orig;
+
+            int GetInt(string name, int orig)
+                => grimmLevel > 0 && name == nameof(PlayerData.grimmChildLevel) ? grimmLevel : orig;
+
+            static void Broadcast()
+            {
+                HeroController.instance.CharmUpdate();
+                PlayMakerFSM.BroadcastEvent("CHARM EQUIP CHECK");
+                PlayMakerFSM.BroadcastEvent("CHARM INDICATOR CHECK");
+            }
+
+            ModHooks.GetPlayerBoolHook += GetBool;
+            ModHooks.GetPlayerIntHook += GetInt;
+
+            Broadcast();
+
+            try
+            {
+                yield return new WaitForSecondsRealtime(seconds);
+            }
+            finally
+            {
+                ModHooks.GetPlayerBoolHook -= GetBool;
+                ModHooks.GetPlayerIntHook -= GetInt;
+
+                Broadcast();
+            }
+        }
+
+        [HKCommand("grimmchild")]
+        [Summary("Summons Grimmchild to fight alongside you.")]
+        [Cooldown(65)]
+        public IEnumerator Grimmchild(long duration = 60000)
+            => FakeCharmCompanion(40, duration / 1000f, grimmLevel: 3);
+
+        [HKCommand("weaversong")]
+        [Summary("Summons weaverlings to fight alongside you.")]
+        [Cooldown(65)]
+        public IEnumerator Weaversong(long duration = 60000)
+            => FakeCharmCompanion(39, duration / 1000f);
+
+        [HKCommand("hatchlings")]
+        [Summary("Knight hatchlings hatch to defend you (uses soul).")]
+        [Cooldown(65)]
+        public IEnumerator Hatchlings(long duration = 60000)
+            => FakeCharmCompanion(22, duration / 1000f);
+
+        [HKCommand("dreamshield")]
+        [Summary("A dreamshield orbits and protects you.")]
+        [Cooldown(65)]
+        public IEnumerator Dreamshield(long duration = 60000)
+            => FakeCharmCompanion(38, duration / 1000f);
+
+        private static IEnumerator ScaleKnight(float factor, float seconds)
+        {
+            Transform t = HeroController.instance.transform;
+
+            // x sign flips with facing direction - scale magnitudes only.
+            float absX = Mathf.Abs(t.localScale.x);
+            float origY = t.localScale.y;
+
+            t.localScale = new Vector3(Mathf.Sign(t.localScale.x) * absX * factor, origY * factor, t.localScale.z);
+
+            try
+            {
+                yield return new WaitForSecondsRealtime(seconds);
+            }
+            finally
+            {
+                HeroController hc = HeroController.instance;
+
+                if (hc != null)
+                {
+                    Transform tr = hc.transform;
+                    tr.localScale = new Vector3(Mathf.Sign(tr.localScale.x) * absX, origY, tr.localScale.z);
+                }
+            }
+        }
+
+        [HKCommand("bigknight")]
+        [Summary("Embiggens the knight (and their hitbox).")]
+        [Cooldown(35)]
+        [Mutex("knightscale")]
+        public IEnumerator BigKnight(long duration = 30000) => ScaleKnight(1.75f, duration / 1000f);
+
+        [HKCommand("smallknight")]
+        [Summary("Shrinks the knight (and their hitbox).")]
+        [Cooldown(35)]
+        [Mutex("knightscale")]
+        public IEnumerator SmallKnight(long duration = 30000) => ScaleKnight(0.5f, duration / 1000f);
+
+        public class HasGeoConditionAttribute : PreconditionAttribute
+        {
+            public override bool Check(string user) => PlayerData.instance != null && PlayerData.instance.geo > 0;
+        }
+
+        [HasGeoCondition]
+        [HKCommand("stealgeo")]
+        [Summary("Steals some of the player's geo.")]
+        [Cooldown(10)]
+        public void StealGeo()
+        {
+            int amount = Mathf.Min(PlayerData.instance.geo, Random.Range(50, 301));
+
+            HeroController.instance.TakeGeo(amount);
+        }
+
+        [HKCommand("givegeo")]
+        [Summary("Gives the player some geo directly.")]
+        [Cooldown(10)]
+        public void GiveGeo()
+        {
+            HeroController.instance.AddGeo(Random.Range(50, 301));
+        }
+
+        [HKCommand("blockhit")]
+        [Summary("Guardian angel: blocks the next hit taken within 30s.")]
+        [Cooldown(35)]
+        public IEnumerator BlockHit(long duration = 30000)
+        {
+            bool used = false;
+
+            int TakeHealth(int damage)
+            {
+                if (damage > 0) used = true;
+                return 0;
+            }
+
+            ModHooks.TakeHealthHook += TakeHealth;
+
+            try
+            {
+                for (float elapsed = 0; elapsed < duration / 1000f && !used; elapsed += Time.unscaledDeltaTime)
+                    yield return null;
+            }
+            finally
+            {
+                ModHooks.TakeHealthHook -= TakeHealth;
+            }
+        }
+
+        [HKCommand("mute")]
+        [Summary("Mutes all game audio.")]
+        [Cooldown(35)]
+        public IEnumerator Mute(long duration = 30000)
+        {
+            float prev = AudioListener.volume;
+
+            AudioListener.volume = 0f;
+
+            try
+            {
+                yield return new WaitForSecondsRealtime(duration / 1000f);
+            }
+            finally
+            {
+                // Never restore a stale zero.
+                AudioListener.volume = prev > Mathf.Epsilon ? prev : 1f;
+            }
         }
     }
 }

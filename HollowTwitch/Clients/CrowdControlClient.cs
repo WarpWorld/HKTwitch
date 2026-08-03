@@ -17,7 +17,7 @@ namespace HollowTwitch.Clients
     /// </summary>
     public class CrowdControlClient : IClient
     {
-        public event Func<string, string, long?, uint?, (EffectStatus, Command)> ChatMessageReceived;
+        public event Func<string, string, long?, uint?, uint, (EffectStatus, Command)> ChatMessageReceived;
         public event Action<string> ClientErrored;
         public event Func<GameUpdate> GameStateRequested;
         public event Func<IEnumerable<EffectResponseMetadata>> MetadataRequested;
@@ -200,15 +200,21 @@ namespace HollowTwitch.Clients
                     (req.parameters?.Select(p => p.ToString()) ?? Array.Empty<string>())
                     .Prepend('!' + req.code.Replace('_', ' ')).ToArray());
 
+                // "3x"/"5x" purchases arrive as a quantity on a single request.
+                uint quantity = Math.Min(Math.Max(req.quantity ?? 1, 1), 100);
+
                 (EffectStatus status, Command cmd) =
-                    ChatMessageReceived?.Invoke(req.viewer, command, req.duration, req.id)
+                    ChatMessageReceived?.Invoke(req.viewer, command, req.duration, req.id, quantity)
                     ?? (EffectStatus.Retry, null);
 
+                // timeRemaining on Success means "this timed effect is now running for X ms".
+                // Instant effects must report 0 - reporting the cooldown here made the client
+                // treat them as long-running effects and stall repeat purchases in its queue.
                 response = new EffectResponse
                 {
                     id = req.id,
                     status = status,
-                    timeRemaining = req.duration ?? ((long?)cmd?.Cooldown?.TotalMilliseconds) ?? 0L,
+                    timeRemaining = req.duration ?? 0L,
                     metadata = TryGetMetadata()
                 };
             }

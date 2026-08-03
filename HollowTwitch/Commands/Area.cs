@@ -101,6 +101,51 @@ namespace HollowTwitch.Commands
             }
         }
 
+        [HKCommand("spiketrap")]
+        [Summary("Colosseum spikes erupt from the floor on both sides of you.")]
+        [Cooldown(15)]
+        public IEnumerator SpikeTrap()
+        {
+            if (!ObjectLoader.InstantiableObjects.TryGetValue("spike", out GameObject prefab) || prefab == null)
+                throw new System.InvalidOperationException("Spike prefab was not preloaded.");
+
+            Vector3 hero_pos = HeroController.instance.transform.position;
+
+            var spikes = new List<GameObject>();
+
+            for (int i = -4; i <= 4; i++)
+            {
+                // Leave the tiles directly under the knight clear so there's a
+                // reaction window instead of a guaranteed hit.
+                if (i is >= -1 and <= 1)
+                    continue;
+
+                Vector3 pos = hero_pos + new Vector3(i * 2f, 0);
+
+                RaycastHit2D hit = Physics2D.Raycast(pos, Vector2.down, 500, 1 << 8);
+
+                if (!hit)
+                    continue;
+
+                pos.y -= hit.distance;
+
+                GameObject spike = Object.Instantiate(prefab, pos, Quaternion.identity);
+
+                spike.SetActive(true);
+                spikes.Add(spike);
+
+                yield return new WaitForSeconds(0.05f);
+            }
+
+            yield return new WaitForSeconds(4f);
+
+            foreach (GameObject spike in spikes)
+            {
+                if (spike != null)
+                    Object.Destroy(spike);
+            }
+        }
+
         [HKCommand("spikefloor")]
         [Summary("Spawns nkg spikes.")]
         [Cooldown(10)]
@@ -137,35 +182,42 @@ namespace HollowTwitch.Commands
                 ctrl.SendEvent("SPIKES READY");
             }
             
-            audio_player.PlayOneShot(Game.Clips.FirstOrDefault(x => x.name == "grimm_spikes_pt_1_grounded"));
+            if (audio_player != null)
+                audio_player.PlayOneShot(Game.Clips.FirstOrDefault(x => x.name == "grimm_spikes_pt_1_grounded"));
             
             yield return new WaitForSeconds(0.55f);
-            
+
             foreach (PlayMakerFSM spike in spike_fsms)
             {
-                spike.SendEvent("SPIKES UP");
+                if (spike != null)
+                    spike.SendEvent("SPIKES UP");
             }
             
             yield return new WaitForSeconds(0.15f);
             
             GameCameras.instance.cameraShakeFSM.SendEvent("EnemyKillShake");
-            
-            audio_player.PlayOneShot(Game.Clips.FirstOrDefault(x => x.name == "grimm_spikes_pt_2_shoot_up"));
+
+            if (audio_player != null)
+                audio_player.PlayOneShot(Game.Clips.FirstOrDefault(x => x.name == "grimm_spikes_pt_2_shoot_up"));
             
             yield return new WaitForSeconds(0.45f);
             
             foreach (PlayMakerFSM spike in spike_fsms)
             {
-                spike.SendEvent("SPIKES DOWN");
+                if (spike != null)
+                    spike.SendEvent("SPIKES DOWN");
             }
             
-            audio_player.PlayOneShot(Game.Clips.FirstOrDefault(x => x.name == "grimm_spikes_pt_3_shrivel_back"));
+            if (audio_player != null)
+                audio_player.PlayOneShot(Game.Clips.FirstOrDefault(x => x.name == "grimm_spikes_pt_3_shrivel_back"));
             
             yield return new WaitForSeconds(0.5f);
 
-            foreach (GameObject go in spike_fsms.Select(x => x.gameObject))
+            // A scene change mid-sequence destroys the spikes - don't touch dead objects.
+            foreach (PlayMakerFSM spike in spike_fsms)
             {
-                Object.Destroy(go);
+                if (spike != null)
+                    Object.Destroy(spike.gameObject);
             }
         }
 
@@ -208,6 +260,11 @@ namespace HollowTwitch.Commands
 
                 yield return new WaitForSeconds(1);
 
+                // A scene change during the wait destroys the charge effects - the cached
+                // EmissionModule structs (and the orb spawn) must not be touched then.
+                if (ShotCharge == null || ShotCharge2 == null)
+                    yield break;
+
                 GameObject orb = orbPre.Spawn(spawnPoint); // Spawn Orb
 
                 orb.GetComponent<Rigidbody2D>().isKinematic = false;
@@ -217,8 +274,8 @@ namespace HollowTwitch.Commands
                 em2.enabled = false;
             }
 
-            Object.Destroy(ShotCharge);
-            Object.Destroy(ShotCharge2);
+            if (ShotCharge != null) Object.Destroy(ShotCharge);
+            if (ShotCharge2 != null) Object.Destroy(ShotCharge2);
         }
     }
 }
