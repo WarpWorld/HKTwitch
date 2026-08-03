@@ -119,22 +119,27 @@ namespace HollowTwitch.ModHelpers
 
         public static void Unload()
         {
+            // Unhook first - the charm restore below can legitimately have nothing to do
+            // (no charms were equipped), and it must never prevent the unhooking.
+            On.BossSceneController.RestoreBindings -= NoOp;
+            On.GGCheckBoundSoul.OnEnter -= CheckBoundSoulEnter;
+
             foreach (Detour d in _detours)
                 d.Dispose();
 
             _detours.Clear();
-            
-            foreach (int charm in _prevCharms)
-                PlayerData.instance.SetBool($"equippedCharm_{charm}", true);
-            
-            PlayerData.instance.equippedCharms.AddRange(_prevCharms);
 
-            _prevCharms.Clear();
+            if (_prevCharms != null)
+            {
+                foreach (int charm in _prevCharms)
+                    PlayerData.instance.SetBool($"equippedCharm_{charm}", true);
 
-            On.BossSceneController.RestoreBindings -= NoOp;
-            On.GGCheckBoundSoul.OnEnter -= CheckBoundSoulEnter;
+                PlayerData.instance.equippedCharms.AddRange(_prevCharms);
+
+                _prevCharms.Clear();
+            }
+
             RestoreBindingsUI();
-            
         }
     }
 }

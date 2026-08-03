@@ -63,8 +63,13 @@
         <EmbeddedResource Include="shaders" />
     </ItemGroup>
 
-  <Target Name="CopyMod" AfterTargets="PostBuildEvent">
-        <Copy SourceFiles="$(TargetPath);$(TargetDir)$(TargetName).pdb" DestinationFolder="C:\Program Files (x86)\Steam\steamapps\common\Hollow Knight\hollow_knight_Data\Managed\Mods\$(TargetName)" SkipUnchangedFiles="true" />
+  <PropertyGroup>
+        <!-- Override with -p:HollowKnightDir=... or an environment variable if your install lives elsewhere. -->
+        <HollowKnightDir Condition="'$(HollowKnightDir)' == ''">D:\SteamLibrary\steamapps\common\Hollow Knight</HollowKnightDir>
+    </PropertyGroup>
+
+    <Target Name="CopyMod" AfterTargets="PostBuildEvent" Condition="Exists('$(HollowKnightDir)')">
+        <Copy SourceFiles="$(TargetPath);$(TargetDir)$(TargetName).pdb" DestinationFolder="$(HollowKnightDir)\hollow_knight_Data\Managed\Mods\$(TargetName)" SkipUnchangedFiles="true" />
     </Target>
 
     <Target Name="CreateReleaseZip" AfterTargets="PostBuildEvent" Condition="'$(Configuration)' == 'Release'">

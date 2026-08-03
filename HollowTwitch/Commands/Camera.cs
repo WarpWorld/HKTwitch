@@ -137,7 +137,9 @@ namespace HollowTwitch.Commands
 
                         SetPosition.DoSetPosition -= PreventCameraReset;
 
-                        _activeEffects ^= CameraEffects.Mirror;
+                        // Not ^= : quitting to the menu mid-effect clears _activeEffects,
+                        // and XOR would then switch Mirror back ON permanently.
+                        _activeEffects &= ~CameraEffects.Mirror;
 
                         // Reset the camera.
                         cam.transform.rotation = prev_rot;

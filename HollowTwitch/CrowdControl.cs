@@ -47,7 +47,7 @@ namespace HollowTwitch
             ReceiveCommands();
         }
 
-        public override string GetVersion() => "1.2.0";
+        public override string GetVersion() => "1.3.0";
 
         public override List<(string, string)> GetPreloadNames() => ObjectLoader.ObjectList.Values.ToList();
 
@@ -75,6 +75,10 @@ namespace HollowTwitch
             _client.ChatMessageReceived += OnMessageReceived;
             _client.GameStateRequested += OnGameStateRequested;
             _client.MetadataRequested += OnMetadataRequested;
+            _client.EffectStopRequested += OnEffectStopRequested;
+
+            // Lets the processor push Paused/Resumed/Finished updates for timed effects.
+            Processor.SendResponse = _client.Send;
 
             _client.ClientErrored += s => Log($"An error occured while receiving messages.\nError: {s}");
 
@@ -90,6 +94,8 @@ namespace HollowTwitch
         }
 
         private IEnumerable<EffectResponseMetadata> OnMetadataRequested() => Processor.GetMetadata();
+
+        private bool OnEffectStopRequested(string code, uint id) => Processor.RequestStop(code, id);
 
         private GameUpdate OnGameStateRequested() => Processor.GetGameState();
 
@@ -127,11 +133,11 @@ namespace HollowTwitch
 
         private void OnQuit()
         {
-            _client.Dispose();
-            _currentThread.Abort();
+            _client?.Dispose();
+            _currentThread?.Abort();
         }
 
-        private (EffectStatus, Command) OnMessageReceived(string user, string message, long? duration)
+        private (EffectStatus, Command) OnMessageReceived(string user, string message, long? duration, uint? requestId)
         {
             Log($"Twitch chat: [{user}: {message}]");
 
@@ -143,7 +149,7 @@ namespace HollowTwitch
             string command = trimmed.Substring(Config.Prefix.Length).Trim();
 
             Logger.Log($"OnMessageReceived is calling Processor.Execute with duration " + duration);
-            return Processor.Execute(user, command, duration, false);
+            return Processor.Execute(user, command, duration, requestId);
         }
 
         private void GenerateHelpInfo()

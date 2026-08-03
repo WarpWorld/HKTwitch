@@ -47,7 +47,11 @@ namespace CrowdControl
         protected virtual void Dispose(bool disposing)
         {
             _quitting.Cancel();
-            if (disposing) { _client.Close(); }
+            if (disposing)
+            {
+                try { _client?.Close(); }
+                catch { /**/ }
+            }
         }
 
         private async void ConnectLoop()
@@ -93,6 +97,14 @@ namespace CrowdControl
                     int bytesRead = socket.Receive(buf);
                     //Log.Debug($"Got {bytesRead} bytes from socket.");
 
+                    if (bytesRead <= 0)
+                    {
+                        // Remote end closed the connection - trigger a reconnect.
+                        mBytes.Clear();
+                        _error.Set();
+                        continue;
+                    }
+
                     //this is "slow" but the messages are tiny so we don't really care
                     foreach (byte b in buf.Take(bytesRead))
                     {
@@ -115,8 +127,11 @@ namespace CrowdControl
                 {
                     Logger.LogError(e);
                     _error.Set();
+
+                    // Only back off on errors - delaying after every successful read
+                    // throttles effect handling to one batch per second.
+                    if (!_quitting.IsCancellationRequested) { await Task.Delay(TimeSpan.FromSeconds(1)); }
                 }
-                finally { if (!_quitting.IsCancellationRequested) { await Task.Delay(TimeSpan.FromSeconds(1)); } }
             }
         }
 
@@ -127,7 +142,6 @@ namespace CrowdControl
                 try
                 {
                     if (Connected) { await Respond(new EffectResponse { id = 0, type = ResponseType.KeepAlive }); }
-                    await Task.Delay(TimeSpan.FromSeconds(1));
                 }
                 catch (Exception e)
                 {
@@ -145,10 +159,11 @@ namespace CrowdControl
         {
             string json = response.Serialize();
             byte[] buffer = Encoding.UTF8.GetBytes(json + '\0');
-            Socket socket = _client.Client;
             await _client_lock.WaitAsync();
             try
             {
+                Socket socket = _client?.Client;
+                if (socket == null || !Connected) { return false; }
                 int bytesSent = socket.Send(buffer);
                 return bytesSent > 0;
             }

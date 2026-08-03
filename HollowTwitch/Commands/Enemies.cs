@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿using System;
+using System.Collections;
 using System.Linq;
 using HollowTwitch.Components;
 using HollowTwitch.Entities.Attributes;
@@ -9,6 +10,8 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using Vasi;
 using USceneManager = UnityEngine.SceneManagement.SceneManager;
+using Object = UnityEngine.Object;
+using Random = UnityEngine.Random;
 
 namespace HollowTwitch.Commands
 {
@@ -20,20 +23,21 @@ namespace HollowTwitch.Commands
         public IEnumerator SpawnEnemy(string name)
         {
             string[] enemies = { "aspid", "buzzer", "roller" };
-            
+
             Logger.Log($"Trying to spawn enemy {name}");
 
-            if (!ObjectLoader.InstantiableObjects.TryGetValue(name, out GameObject go))
-                yield break;
-            
-            if (!enemies.Contains(name))
-                yield break;
+            // Throwing here (instead of silently ending) makes the processor report
+            // Failure so the viewer gets refunded for an unknown/unloaded enemy.
+            if (!enemies.Contains(name) || !ObjectLoader.InstantiableObjects.TryGetValue(name, out GameObject go) || go == null)
+                throw new ArgumentException($"Unknown or unloaded enemy \"{name}\".");
 
             GameObject enemy = Object.Instantiate(go, HeroController.instance.gameObject.transform.position, Quaternion.identity);
 
             yield return new WaitForSecondsRealtime(1);
 
-            enemy.SetActive(true);
+            // The scene may have changed while we waited, destroying the enemy.
+            if (enemy != null)
+                enemy.SetActive(true);
         }
 
         [HKCommand("jars")]
@@ -49,14 +53,19 @@ namespace HollowTwitch.Commands
 
             Vector3 pos = HeroController.instance.transform.position;
 
-            GameObject break_jar = ObjectLoader.InstantiableObjects["prefab_jar"];
+            if (!ObjectLoader.InstantiableObjects.TryGetValue("prefab_jar", out GameObject break_jar)
+                || !ObjectLoader.InstantiableObjects.TryGetValue("jar", out GameObject jar_prefab)
+                || break_jar == null || jar_prefab == null)
+                throw new InvalidOperationException("Jar prefabs were not preloaded.");
+
+            GameObject particles = GameObject.Find(path);
 
             for (int i = -2; i <= 2; i++)
             {
                 // Spawn the jar
                 GameObject go = Object.Instantiate
                 (
-                    ObjectLoader.InstantiableObjects["jar"],
+                    jar_prefab,
                     pos + new Vector3(i * 7, 10, 0),
                     Quaternion.identity
                 );
@@ -69,7 +78,7 @@ namespace HollowTwitch.Commands
 
                 var ctrl = go.AddComponent<BetterSpawnJarControl>();
 
-                var ps = GameObject.Find(path).GetComponent<ParticleSystem>();
+                var ps = particles != null ? particles.GetComponent<ParticleSystem>() : null;
 
                 ctrl.Clip = shatter_clip;
 

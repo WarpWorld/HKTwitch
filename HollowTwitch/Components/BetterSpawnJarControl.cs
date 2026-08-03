@@ -42,7 +42,9 @@ namespace HollowTwitch.Components
         {
             transform.SetPositionZ(0.01f);
 
-            ReadyDust.Play();
+            // Particle systems are looked up from live scene objects and may be missing -
+            // the jar still has to fall and spawn its enemy without them.
+            if (ReadyDust != null) ReadyDust.Play();
 
             yield return new WaitForSeconds(0.5f);
 
@@ -51,9 +53,9 @@ namespace HollowTwitch.Components
             _rb2d.velocity = new Vector2(0f, -25f);
             _rb2d.angularVelocity = Random.Range(0, 2) <= 0 ? 300 : -300;
 
-            ReadyDust.Stop();
-            Trail.Play();
-            
+            if (ReadyDust != null) ReadyDust.Stop();
+            if (Trail != null) Trail.Play();
+
             _sprite.enabled = true;
         }
 
@@ -61,11 +63,11 @@ namespace HollowTwitch.Components
         {
             GameCameras.instance.cameraShakeFSM.SendEvent("EnemyKillShake");
 
-            Trail.Stop();
-            ParticleBreakSouth.Play();
-            ParticleBreak.Play();
+            if (Trail != null) Trail.Stop();
+            if (ParticleBreakSouth != null) ParticleBreakSouth.Play();
+            if (ParticleBreak != null) ParticleBreak.Play();
 
-            StrikeNailReaction.Spawn(transform.position);
+            if (StrikeNailReaction != null) StrikeNailReaction.Spawn(transform.position);
 
             _col.enabled = false;
 
@@ -87,11 +89,14 @@ namespace HollowTwitch.Components
                 pos += new Vector3(0, 0.6f);
             }
 
+            if (EnemyPrefab == null) return;
+
             GameObject go = Instantiate(EnemyPrefab, pos, Quaternion.identity);
-            
+
             go.SetActive(true);
 
-            go.GetComponent<HealthManager>().hp = EnemyHP;
+            HealthManager hm = go.GetComponent<HealthManager>();
+            if (hm != null) hm.hp = EnemyHP;
 
             go.tag = "Boss";
         }

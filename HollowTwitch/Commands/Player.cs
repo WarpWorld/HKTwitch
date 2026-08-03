@@ -96,30 +96,24 @@ namespace HollowTwitch.Commands
         [Mutex("BoundaryLimit")]
         public IEnumerator Conveyor(long duration = 30000)
         {
-            bool vert = Random.Range(0, 2) == 0;
-            float speed = Random.Range(-30f, 30f);
+            // Horizontal floor conveyor only - the game's vertical conveyor component only
+            // acts during wall-slides, so it read as the effect doing nothing.
+            // Modest speed range, randomly left or right.
+            float speed = Random.Range(4f, 12f) * (Random.Range(0, 2) == 0 ? 1f : -1f);
+
             HeroController hc = HeroController.instance;
 
             IEnumerator i = BoundaryLimit(() =>
             {
-                if (vert)
-                {
-                    hc.cState.onConveyorV = true;
-                    hc.GetComponent<ConveyorMovementHero>().StartConveyorMove(0f, speed);
-                }
-                else
-                {
-                    hc.cState.onConveyor = true;
-                    hc.SetConveyorSpeed(speed);
-                }
+                hc.cState.onConveyor = true;
+                hc.SetConveyorSpeed(speed);
             }, () =>
             {
-                if (vert)
-                    hc.cState.onConveyorV = false;
-                else
-                    hc.cState.onConveyor = false;
+                hc.cState.onConveyor = false;
 
-                hc.GetComponent<ConveyorMovementHero>().StopConveyorMove();
+                // conveyorSpeed persists on the HeroController and is shared with wind
+                // zones/the wind effect - a stale value here hurls the player later.
+                hc.SetConveyorSpeed(0f);
             }, duration / 1000f);
 
             while (i.MoveNext()) yield return i.Current;
@@ -179,7 +173,23 @@ namespace HollowTwitch.Commands
             ModHooks.HitInstanceHook -= HitInstance;
         }
 
+        public class GroundedConditionAttribute : PreconditionAttribute
+        {
+            public override bool Check(string user)
+            {
+                HeroController hc = HeroController.instance;
+
+                return hc != null
+                       && hc.cState != null
+                       && hc.cState.onGround
+                       && !hc.cState.recoiling
+                       && !hc.cState.hazardDeath
+                       && hc.transitionState == HeroTransitionState.WAITING_TO_TRANSITION;
+            }
+        }
+
         [HKCommand("sleep")]
+        [GroundedCondition]
         [Cooldown(10)]
         public IEnumerator Sleep()
         {
@@ -189,23 +199,61 @@ namespace HollowTwitch.Commands
 
             var anim = hc.GetComponent<HeroAnimationController>();
 
+            float clipDuration = anim.GetClipDuration(SLEEP_CLIP);
+
+            // If the clip can't be resolved the knight would "sleep" for 0 seconds while
+            // still juggling control - just skip the effect entirely.
+            if (clipDuration <= 0)
+                yield break;
+
+            bool cancelled = false;
+
+            // Taking damage knocks the knight out of the sleep animation - end the effect
+            // instead of leaving them stuck without control.
+            int OnDamage(ref int hazardType, int damage)
+            {
+                if (damage > 0) cancelled = true;
+                return damage;
+            }
+
+            ModHooks.TakeDamageHook += OnDamage;
+
             anim.PlayClip(SLEEP_CLIP);
 
             hc.StopAnimationControl();
             hc.RelinquishControl();
 
-            //leave this one as WaitForSeconds, I think?
-            yield return new WaitForSeconds(anim.GetClipDuration(SLEEP_CLIP));
+            try
+            {
+                for (float elapsed = 0; elapsed < clipDuration && !cancelled;)
+                {
+                    if (hc.cState.dead || hc.cState.hazardDeath || hc.cState.transitioning)
+                        break;
 
-            hc.StartAnimationControl();
-            hc.RegainControl();
+                    // Scaled time so the sleep animation and timer stay in sync
+                    // (both freeze while the game is paused).
+                    elapsed += Time.deltaTime;
+
+                    yield return null;
+                }
+            }
+            finally
+            {
+                // Always wake back up, no matter how the sleep ended.
+                ModHooks.TakeDamageHook -= OnDamage;
+
+                hc.StartAnimationControl();
+                hc.RegainControl();
+            }
         }
 
         [HKCommand("limitSoul")]
         [Cooldown(35)]
         public IEnumerator LimitSoul()
         {
-            yield return PlayerDataUtil.FakeSet(nameof(PlayerData.soulLimited), false, 30);
+            // soulLimited is false in normal play - faking it to false did nothing.
+            // Forcing true applies the Godhome-style soul cap for the duration.
+            yield return PlayerDataUtil.FakeSet(nameof(PlayerData.soulLimited), true, 30);
         }
 
         [HKCommand("jumpspeed")]
@@ -270,6 +318,7 @@ namespace HollowTwitch.Commands
             {
                 bool ready = !(HeroController.instance.cState.isPaused
                                || HeroController.instance.cState.dead
+                               || HeroController.instance.cState.hazardDeath
                                || HeroController.instance.cState.transitioning
                                || HeroController.instance.cState.nearBench);
 
@@ -288,6 +337,8 @@ namespace HollowTwitch.Commands
 
             try { ModHooks.BeforePlayerDeadHook -= BeforePlayerDead; } catch {/**/}
             try { ModHooks.BeforeSceneLoadHook -= BeforeSceneLoad; } catch {/**/}
+            try { ModHooks.BlueHealthHook -= BlueHealth; } catch {/**/}
+            try { ModHooks.CharmUpdateHook -= CharmUpdate; } catch {/**/}
 
             unset();
         }
@@ -451,14 +502,23 @@ namespace HollowTwitch.Commands
             SanicHelper.TimeScale = 1;
         }
 
+        // The knight's normal gravity scale, used when a sane value can't be captured
+        // (e.g. gravity was already zeroed by a transition when the effect started).
+        private const float DefaultGravityScale = 0.79f;
+
         [HKCommand("gravity")]
         [Summary("Changes the gravity to the specified scale. Scale Limit: [0.2, 1.9]")]
         [Cooldown(35)]
+        [Mutex("gravity")]
         public IEnumerator ChangeGravity([EnsureFloat(0.2f, 1.90f)] float scale, long duration = 30000)
         {
             var rigidBody = HeroController.instance.gameObject.GetComponent<Rigidbody2D>();
 
             float def = rigidBody.gravityScale;
+
+            // Never capture 0 as the value to restore - that leaves the knight floating forever.
+            if (def <= Mathf.Epsilon)
+                def = DefaultGravityScale;
 
             rigidBody.gravityScale = scale;
 
@@ -574,18 +634,40 @@ namespace HollowTwitch.Commands
         [Cooldown(15)]
         [Summary("Gain float for 10s.")]
         [Mutex("BoundaryLimit")]
+        [Mutex("gravity")]
         public IEnumerator Float(long duration = 10000)
         {
-            static void NoOp(On.HeroController.orig_AffectedByGravity orig, HeroController self, bool gravityapplies) { }
+            float savedScale = 0f;
+
+            // Let the game keep zeroing gravity (transitions, hazard respawns) but block
+            // re-enables while floating. A blanket no-op here used to swallow the game's
+            // own restore, and AffectedByGravity(true) then brought back a saved
+            // prevGravityScale that could itself be 0 - leaving the knight floating forever.
+            void BlockGravityRestore(On.HeroController.orig_AffectedByGravity orig, HeroController self, bool gravityapplies)
+            {
+                if (!gravityapplies) orig(self, false);
+            }
 
             IEnumerator i = BoundaryLimit(() =>
             {
+                var rb = HeroController.instance.GetComponent<Rigidbody2D>();
+
+                if (rb != null && rb.gravityScale > Mathf.Epsilon)
+                    savedScale = rb.gravityScale;
+
                 HeroController.instance.AffectedByGravity(false);
-                On.HeroController.AffectedByGravity += NoOp;
+                On.HeroController.AffectedByGravity += BlockGravityRestore;
             }, () =>
             {
-                On.HeroController.AffectedByGravity -= NoOp;
+                On.HeroController.AffectedByGravity -= BlockGravityRestore;
                 HeroController.instance.AffectedByGravity(true);
+
+                // If the game's saved value was 0/stale, force a sane gravity scale -
+                // never leave the knight weightless after the effect ends.
+                var rb = HeroController.instance.GetComponent<Rigidbody2D>();
+
+                if (rb != null && rb.gravityScale <= Mathf.Epsilon)
+                    rb.gravityScale = savedScale > Mathf.Epsilon ? savedScale : DefaultGravityScale;
             }, duration / 1000f);
 
             while (i.MoveNext()) yield return i.Current;
@@ -829,7 +911,9 @@ namespace HollowTwitch.Commands
                     yield return PlayerDataUtil.FakeSet(nameof(PlayerData.hasDreamNail), pd.hasDreamNail ^ true, time);
                     break;
                 case "nail":
-                    Mirror.SetField(HeroController.instance, "attack_cooldown", duration);
+                    // attack_cooldown is in seconds; writing raw milliseconds locked the
+                    // nail for ~12 hours instead of 45 seconds.
+                    Mirror.SetField(HeroController.instance, "attack_cooldown", time);
                     break;
             }
         }
