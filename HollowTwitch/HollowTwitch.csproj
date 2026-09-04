@@ -6,7 +6,7 @@
         <AssemblyTitle>HollowTwitch</AssemblyTitle>
         <Product>HollowTwitch</Product>
         <OutputPath>bin\$(Configuration)\</OutputPath>
-        <Version>2.1.0</Version>
+        <Version>1.2.1</Version>
         <LangVersion>latest</LangVersion>
         <DebugType>portable</DebugType>
     </PropertyGroup>
@@ -69,7 +69,7 @@
     </PropertyGroup>
 
     <Target Name="CopyMod" AfterTargets="PostBuildEvent" Condition="Exists('$(HollowKnightDir)')">
-        <Copy SourceFiles="$(TargetPath);$(TargetDir)$(TargetName).pdb" DestinationFolder="$(HollowKnightDir)\hollow_knight_Data\Managed\Mods\$(TargetName)" SkipUnchangedFiles="true" />
+        <Copy SourceFiles="$(TargetPath);$(TargetDir)$(TargetName).pdb;$(ProjectDir)ConnectorLib.JSON.dll" DestinationFolder="$(HollowKnightDir)\hollow_knight_Data\Managed\Mods\$(TargetName)" SkipUnchangedFiles="true" />
     </Target>
 
     <Target Name="CreateReleaseZip" AfterTargets="PostBuildEvent" Condition="'$(Configuration)' == 'Release'">
@@ -77,6 +77,7 @@
         <Delete Files="$(ProjectDir)/$(TargetName).zip" />
         <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ProjectDir)/Output/" />
         <Copy SourceFiles="$(TargetDir)$(TargetName).pdb" DestinationFolder="$(ProjectDir)/Output/" />
+        <Copy SourceFiles="$(ProjectDir)ConnectorLib.JSON.dll" DestinationFolder="$(ProjectDir)/Output/" />
         <Copy Condition="Exists('$(SolutionDir)/README.md')" SourceFiles="$(SolutionDir)/README.md" DestinationFolder="$(ProjectDir)/Output/" ContinueOnError="true" />
         <ZipDirectory DestinationFile="$(ProjectDir)/$(TargetName).zip" SourceDirectory="$(ProjectDir)/Output" />
         <RemoveDir Directories="$(ProjectDir)Output" />

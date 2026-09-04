@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -20,7 +20,7 @@ namespace HollowTwitch.Clients
         public event Func<string, string, long?, uint?, uint, (EffectStatus, Command)> ChatMessageReceived;
         public event Action<string> ClientErrored;
         public event Func<GameUpdate> GameStateRequested;
-        public event Func<IEnumerable<EffectResponseMetadata>> MetadataRequested;
+        public event Func<IEnumerable<DataResponse>> MetadataRequested;
         public event Func<string, uint, bool> EffectStopRequested;
 
         private SimpleTCPClient _client;
@@ -112,7 +112,7 @@ namespace HollowTwitch.Clients
             }
         }
 
-        private Dictionary<string, EffectResponseMetadata> TryGetMetadata()
+        private Dictionary<string, DataResponse> TryGetMetadata()
         {
             try
             {
@@ -136,11 +136,11 @@ namespace HollowTwitch.Clients
 
             switch (request)
             {
-                case EffectRequest req when request.type == RequestType.Start:
+                case EffectRequest req when request.type == RequestType.EffectStart:
                     HandleEffectStart(req);
                     return;
 
-                case EffectRequest req when request.type == RequestType.Test:
+                case EffectRequest req when request.type == RequestType.EffectTest:
                 {
                     // Respond as if the effect would start, but don't actually run it.
                     bool ready = CrowdControl.Instance?.Processor?.IsGameReady() ?? false;
@@ -153,7 +153,7 @@ namespace HollowTwitch.Clients
                     return;
                 }
 
-                case EffectRequest req when request.type == RequestType.Stop:
+                case EffectRequest req when request.type == RequestType.EffectStop:
                 {
                     // If a running effect is found, it reports Finished (with its original id)
                     // once it has unwound and restored state; nothing else to send here.
@@ -185,7 +185,18 @@ namespace HollowTwitch.Clients
                     return;
                 }
 
+                case not null when request.type == RequestType.Version:
+                    _client?.Respond(new VersionResponse(request.id, new VersionNumber(HollowTwitch.CrowdControl.ModVersion)));
+                    return;
+
                 case not null when request.type == RequestType.KeepAlive:
+                case not null when request.type == RequestType.PlayerInfo:
+                case not null when request.type == RequestType.Login:
+                    return;
+
+                default:
+                    // Anything new the client starts sending is ignored rather than treated as an error.
+                    Logger.Log($"Ignoring client message of type {request.type}.");
                     return;
             }
         }

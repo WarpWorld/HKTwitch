@@ -13,7 +13,7 @@ namespace HollowTwitch
         event Action<string> ClientErrored;
 
         event Func<GameUpdate> GameStateRequested;
-        event Func<IEnumerable<EffectResponseMetadata>> MetadataRequested;
+        event Func<IEnumerable<DataResponse>> MetadataRequested;
 
         /// <summary>Raised for effect stop requests. Args: effect code, request id. Returns true if a running effect was found.</summary>
         event Func<string, uint, bool> EffectStopRequested;

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -47,7 +47,10 @@ namespace HollowTwitch
             ReceiveCommands();
         }
 
-        public override string GetVersion() => "1.3.0";
+        /// <summary>Mod version reported to the Crowd Control app. Keep in sync with HollowTwitch.csproj.</summary>
+        public const string ModVersion = "1.2.1";
+
+        public override string GetVersion() => ModVersion;
 
         public override List<(string, string)> GetPreloadNames() => ObjectLoader.ObjectList.Values.ToList();
 
@@ -93,7 +96,7 @@ namespace HollowTwitch
             Log("Started receiving");
         }
 
-        private IEnumerable<EffectResponseMetadata> OnMetadataRequested() => Processor.GetMetadata();
+        private IEnumerable<DataResponse> OnMetadataRequested() => Processor.GetMetadata();
 
         private bool OnEffectStopRequested(string code, uint id) => Processor.RequestStop(code, id);
 

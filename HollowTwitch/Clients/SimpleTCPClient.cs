@@ -114,18 +114,36 @@ namespace CrowdControl
                             //Log.Debug($"Got a complete message: {mBytes.ToArray().ToHexadecimalString()}");
                             string json = Encoding.UTF8.GetString(mBytes.ToArray());
                             //Log.Debug($"Got a complete message: {json}");
-                            //Request req = JsonConvert.DeserializeObject<Request>(json, JSON_SETTINGS);
-                            SimpleJSONRequest req = SimpleJSONRequest.Parse(json);
+                            mBytes.Clear();
+
+                            // Unknown or malformed messages (new client message types, keepalives,
+                            // etc.) must never kill the socket - just skip them.
+                            SimpleJSONRequest req = null;
+                            try
+                            {
+                                if (!SimpleJSONRequest.TryParse(json, out req) || req == null)
+                                {
+                                    Logger.Log($"Ignoring unrecognized client message: {Truncate(json)}");
+                                    continue;
+                                }
+                            }
+                            catch (Exception e)
+                            {
+                                Logger.LogError($"Could not parse client message: {Truncate(json)} ({e.Message})");
+                                continue;
+                            }
+
                             //Log.Debug($"Got a request with ID {req.id}.");
                             try { OnRequestReceived?.Invoke(req); }
                             catch (Exception e) { Logger.LogError(e); }
-                            mBytes.Clear();
                         }
                     }
                 }
                 catch (Exception e)
                 {
                     Logger.LogError(e);
+                    // Never carry a partial message over to the next connection.
+                    mBytes.Clear();
                     _error.Set();
 
                     // Only back off on errors - delaying after every successful read
@@ -151,6 +169,8 @@ namespace CrowdControl
                 finally { if (!_quitting.IsCancellationRequested) { await Task.Delay(TimeSpan.FromSeconds(1)); } }
             }
         }
+
+        private static string Truncate(string s) => (s != null && s.Length > 200) ? s.Substring(0, 200) + "..." : s;
 
         public event Action<SimpleJSONRequest> OnRequestReceived;
         public event Action OnConnected;

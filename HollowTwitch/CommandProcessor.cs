@@ -84,19 +84,19 @@ namespace HollowTwitch
             "Room_mapper"
         });
 
-        public IEnumerable<EffectResponseMetadata> GetMetadata()
+        public IEnumerable<DataResponse> GetMetadata()
         {
             // Metadata requests can arrive while no save is loaded - report what we safely can.
             HeroController hc = HeroController.instance;
 
             if (hc != null && hc.playerData != null)
             {
-                yield return EffectResponseMetadata.Success("health", hc.playerData.health);
-                yield return EffectResponseMetadata.Success("mpCharge", hc.playerData.MPCharge);
-                yield return EffectResponseMetadata.Success("mpReserve", hc.playerData.MPReserve);
+                yield return DataResponse.Success("health", hc.playerData.health);
+                yield return DataResponse.Success("mpCharge", hc.playerData.MPCharge);
+                yield return DataResponse.Success("mpReserve", hc.playerData.MPReserve);
             }
 
-            yield return EffectResponseMetadata.Success("location", _currentScene);
+            yield return DataResponse.Success("location", _currentScene);
         }
 
         public GameUpdate GetGameState()
