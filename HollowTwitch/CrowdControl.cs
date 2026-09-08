@@ -48,7 +48,7 @@ namespace HollowTwitch
         }
 
         /// <summary>Mod version reported to the Crowd Control app. Keep in sync with HollowTwitch.csproj.</summary>
-        public const string ModVersion = "1.2.1";
+        public const string ModVersion = "1.2.2";
 
         public override string GetVersion() => ModVersion;
 

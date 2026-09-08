@@ -6,7 +6,7 @@
         <AssemblyTitle>HollowTwitch</AssemblyTitle>
         <Product>HollowTwitch</Product>
         <OutputPath>bin\$(Configuration)\</OutputPath>
-        <Version>1.2.1</Version>
+        <Version>1.2.2</Version>
         <LangVersion>latest</LangVersion>
         <DebugType>portable</DebugType>
     </PropertyGroup>
